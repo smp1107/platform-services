@@ -1,437 +1,189 @@
-# 📚 Guía de Reutilización — Práctica Calificada 2
+# Notas - Desarrollo Web con .NET
 
-> Basada en el caso Hertz (`platform-services-master`).
-> Úsala como referencia para cualquier nuevo examen.
+## Estructura general del proyecto
 
----
+El proyecto siempre tiene dos partes: Shared (no se toca nunca) y el Bounded Context (BC) que cambia según el caso.
 
-## ✅ Lo que NUNCA tocas
-
-### Carpeta `Shared/` — intacta al 100%
-```
-Shared/
-├── Application/
-│   ├── Internal/EventHandlers/IEventHandler.cs
-│   └── Model/Result.cs                          ← Result<T>
-├── Domain/
-│   ├── Model/
-│   │   ├── Entities/IAuditableEntity.cs          ← herencia del aggregate
-│   │   ├── Error.cs                              ← clase base de errores
-│   │   └── Events/IEvent.cs
-│   └── Repositories/
-│       ├── IBaseRepository.cs                    ← herencia del repositorio
-│       └── IUnitOfWork.cs
-├── Infrastructure/
-│   ├── Interfaces/AspNetCore/Configuration/
-│   │   ├── KebabCaseRouteNamingConvention.cs     ← kebab-case en URLs
-│   │   └── Extensions/StringExtensions.cs
-│   └── Persistence/EntityFrameworkCore/
-│       ├── Configuration/
-│       │   ├── AppDbContext.cs                   ← contexto de BD
-│       │   └── Extensions/ModelBuilderExtensions.cs
-│       ├── Interceptors/AuditableEntityInterceptor.cs
-│       └── Repositories/
-│           ├── BaseRepository.cs                 ← implementación base
-│           └── UnitOfWork.cs
-├── Interfaces/Rest/ProblemDetails/
-│   └── ProblemDetailsFactory.cs                  ← manejo de errores HTTP
-└── Resources/
-    ├── CommonMessages.cs
-    └── Errors/ErrorMessage.cs
-```
+La carpeta Shared contiene: Result.cs, IAuditableEntity.cs, Error.cs, IBaseRepository.cs, IUnitOfWork.cs, KebabCaseRouteNamingConvention.cs, AppDbContext.cs, AuditableEntityInterceptor.cs, BaseRepository.cs, UnitOfWork.cs, ProblemDetailsFactory.cs, CommonMessages.cs y ErrorMessage.cs.
 
 ---
 
-## 📝 Lo que SÍ cambias para cada nuevo examen
+## Orden de creación de archivos
 
-### 1️⃣ Nombre del Bounded Context
-Renombra la carpeta `Services/` con el nombre del BC del enunciado:
-```
-Services/ → Bookings/ o Payments/ o Reservations/
-```
+1. Enums simples (ValueObjects tipo enum)
+2. Records de owned attributes (ValueObjects compuestos)
+3. Enum de errores del BC
+4. Command (record con los parámetros de entrada)
+5. Aggregate Root (clase principal con IAuditableEntity)
+6. Interface del repositorio
+7. Interface del command service
+8. Implementación del command service
+9. Implementación del repositorio
+10. ModelBuilderExtensions
+11. Resources (request y response)
+12. Los tres assemblers
+13. Controller
+14. Program.cs y appsettings.json
+15. Migración y prueba
 
 ---
 
-### 2️⃣ `Domain/Model/ValueObjects/`
+## ValueObjects
 
-#### Si hay un **enum**:
-```csharp
-// Hertz tenía EVehicles, tú pones el del enunciado
-public enum ECategoria
-{
-    Valor1 = 1,
-    Valor2 = 2,
-    Valor3 = 3
-}
-```
-> ⚠️ Siempre asigna los números explícitamente (`= 1`, `= 2`...) si el enunciado los define.
+Enum simple - asignar números si el enunciado los define:
+public enum ENombre { Valor1 = 1, Valor2 = 2, Valor3 = 3 }
 
-#### Si hay un **owned attribute** (dirección, coordenadas, etc.):
-```csharp
+Owned attribute - siempre con constructor vacío para EF Core:
 public record NombreVO(string Campo1, string Campo2, string Campo3)
-{
-    public NombreVO() : this(string.Empty, string.Empty, string.Empty) { }
-}
-```
-> ⚠️ El constructor vacío es obligatorio para EF Core.
+{ public NombreVO() : this(string.Empty, string.Empty, string.Empty) { } }
+
+Identificarlos: "owned attribute" en el enunciado = VO obligatorio. Enum con valores definidos = VO obligatorio.
 
 ---
 
-### 3️⃣ `Domain/Model/Errors/`
-Crea un enum con los errores específicos del nuevo BC:
-```csharp
-public enum NuevoBCErrors
-{
-    None,
-    // Agrega los errores según las reglas de negocio del enunciado
-    DuplicateX,
-    InvalidY,
-    OperationCancelled,
-    DatabaseError,
-    InternalServerError   // siempre al final
-}
-```
-> 💡 Tip: Agrega un error por cada regla de negocio del enunciado.
+## Enum de errores
+
+public enum NombreBCErrors { None, DuplicadoX, InvalidoY, OperationCancelled, DatabaseError, InternalServerError }
+
+Agregar un valor por cada regla de negocio del enunciado. InternalServerError siempre al final.
 
 ---
 
-### 4️⃣ `Domain/Model/Commands/`
-```csharp
-public record CreateNuevaEntidadCommand(
-    // solo los parámetros que el usuario envía
-    // NO incluir: Id, CreatedAt, UpdatedAt, ni campos calculados
-    string Campo1,
-    EEnum Campo2,
-    double Campo3
-);
-```
+## Command
+
+public record CreateNombreCommand(string Campo1, ENombre Campo2, double Campo3);
+
+No incluir: Id, CreatedAt, UpdatedAt, ni campos que calcula el sistema.
 
 ---
 
-### 5️⃣ `Domain/Model/Aggregates/`
-```csharp
-public class NuevaEntidad : IAuditableEntity
+## Aggregate Root
+
+Propiedades con private set. CreatedAt y UpdatedAt con public set (los llena el interceptor). Constructor protected vacío para EF Core. Constructor público que recibe el Command.
+
+public class Nombre : IAuditableEntity
 {
     public int Id { get; private set; }
-    // ... propiedades del enunciado
-    public NuevoVO Campo { get; private set; }     // si hay owned attribute
-
-    public DateTimeOffset? CreatedAt { get; set; } // public set (interceptor)
-    public DateTimeOffset? UpdatedAt { get; set; } // public set (interceptor)
-
-    protected NuevaEntidad() { }                   // EF Core
-
-    public NuevaEntidad(CreateNuevaEntidadCommand command)
-    {
-        // asigna desde el command
-    }
+    public string Campo { get; private set; }
+    public ENombre EnumCampo { get; private set; }
+    public NombreVO VoCampo { get; private set; }
+    public DateTimeOffset? CreatedAt { get; set; }
+    public DateTimeOffset? UpdatedAt { get; set; }
+    protected Nombre() { Campo = string.Empty; VoCampo = new NombreVO(); }
+    public Nombre(CreateNombreCommand command)
+    { Campo = command.Campo; EnumCampo = command.EnumCampo; VoCampo = new NombreVO(command.C1, command.C2, command.C3); }
 }
-```
 
 ---
 
-### 6️⃣ `Domain/Repositories/`
-```csharp
-public interface INuevaEntidadRepository : IBaseRepository<NuevaEntidad>
-{
-    // Agrega métodos según las reglas de negocio
-    // Ejemplo: Task<bool> ExistsByXAndYAsync(string x, int y);
-}
-```
+## Repositorio - Interface
+
+public interface INombreRepository : IBaseRepository<Nombre>
+{ Task<bool> ExistsByXAsync(string x); }
+
+Agregar un método por cada validación contra BD que pidan las reglas.
 
 ---
 
-### 7️⃣ `Application/CommandServices/`
-```csharp
-public interface INuevaEntidadCommandService
-{
-    Task<Result<NuevaEntidad>> Handle(CreateNuevaEntidadCommand command);
-}
-```
+## Command Service - Interface
+
+public interface INombreCommandService
+{ Task<Result<Nombre>> Handle(CreateNombreCommand command); }
 
 ---
 
-### 8️⃣ `Application/Internal/CommandServices/`
-```csharp
-public class NuevaEntidadCommandService(
-    INuevaEntidadRepository repository,
-    IUnitOfWork unitOfWork) : INuevaEntidadCommandService
-{
-    public async Task<Result<NuevaEntidad>> Handle(CreateNuevaEntidadCommand command)
-    {
-        // Regla 1: validación simple
-        if (condicion)
-            return Result<NuevaEntidad>.Failure(NuevoBCErrors.ErrorX, "Mensaje");
+## Command Service - Implementación
 
-        // Regla 2: validación contra BD
-        var existe = await repository.ExistsByXAsync(command.Campo);
-        if (existe)
-            return Result<NuevaEntidad>.Failure(NuevoBCErrors.DuplicateX, "Mensaje");
+El orden dentro del Handle es: primero validaciones simples (sin BD), luego validaciones contra BD, luego el try-catch con save.
 
-        try
-        {
-            var entidad = new NuevaEntidad(command);
-            await repository.AddAsync(entidad);
-            await unitOfWork.CompleteAsync();
-            return Result<NuevaEntidad>.Success(entidad);
-        }
-        catch (Exception ex)
-        {
-            return Result<NuevaEntidad>.Failure(
-                NuevoBCErrors.InternalServerError, ex.Message);
-        }
-    }
-}
-```
+Retorno de éxito: return Result<Nombre>.Success(entidad);
+Retorno de error: return Result<Nombre>.Failure(NombreBCErrors.ErrorX, "Mensaje");
 
 ---
 
-### 9️⃣ `Infrastructure/Persistence/EFC/Repositories/`
-```csharp
-public class NuevaEntidadRepository(AppDbContext context)
-    : BaseRepository<NuevaEntidad>(context), INuevaEntidadRepository
-{
-    public async Task<bool> ExistsByXAsync(string x)
-        => await Context.Set<NuevaEntidad>()
-            .AnyAsync(e => e.Campo == x);
-}
-```
+## Repositorio - Implementación
+
+public class NombreRepository(AppDbContext context) : BaseRepository<Nombre>(context), INombreRepository
+{ public async Task<bool> ExistsByXAsync(string x) => await Context.Set<Nombre>().AnyAsync(e => e.Campo == x); }
 
 ---
 
-### 🔟 `Infrastructure/Persistence/EFC/Configuration/Extensions/`
-```csharp
-public static class ModelBuilderExtensions
-{
-    public static void ApplyNuevoBCConfiguration(this ModelBuilder builder)
-    {
-        builder.Entity<NuevaEntidad>(entity =>
-        {
-            entity.ToTable("nombre_tabla");           // snake_case
-            entity.HasKey(e => e.Id);
-            entity.Property(e => e.Id)
-                .HasColumnName("id").IsRequired().ValueGeneratedOnAdd();
+## ModelBuilderExtensions
 
-            // propiedades simples
-            entity.Property(e => e.Campo1)
-                .HasColumnName("campo1").IsRequired().HasMaxLength(90);
+El método se llama ApplyNombreBCConfiguration y se invoca desde AppDbContext en OnModelCreating.
 
-            // enum → guardar como int
-            entity.Property(e => e.EnumCampo)
-                .HasColumnName("enum_campo").IsRequired().HasConversion<int>();
-
-            // owned attribute
-            entity.OwnsOne(e => e.DireccionCampo, dir =>
-            {
-                dir.Property(d => d.Campo1).HasColumnName("dir_campo1")
-                    .IsRequired().HasMaxLength(40);
-                dir.Property(d => d.Campo2).HasColumnName("dir_campo2")
-                    .IsRequired().HasMaxLength(40);
-            });
-
-            entity.Property(e => e.CreatedAt).HasColumnName("created_at");
-            entity.Property(e => e.UpdatedAt).HasColumnName("updated_at");
-        });
-    }
-}
-```
+Para propiedades simples: .HasColumnName("nombre_columna").IsRequired().HasMaxLength(90)
+Para enums: .HasConversion<int>()
+Para owned attributes: entity.OwnsOne(e => e.VoCampo, vo => { vo.Property(v => v.C1).HasColumnName("vo_c1").HasMaxLength(40); });
+Siempre agregar CreatedAt y UpdatedAt al final sin IsRequired.
 
 ---
 
-### 1️⃣1️⃣ `Interfaces/REST/Resources/`
-```csharp
-// Response DTO — lo que retorna el API
-public record NuevaEntidadResource(
-    int Id,
-    string Campo1,
-    int EnumCampo,       // enums como int en el response
-    double Campo2
-    // NO incluir: Amount si el enunciado lo pide omitir
-);
+## AppDbContext - OnModelCreating
 
-// Request DTO — lo que recibe el API
-public record CreateNuevaEntidadResource(
-    string Campo1,
-    int EnumCampo,       // enums como int en el request
-    double Campo2
-);
-```
-
----
-
-### 1️⃣2️⃣ `Interfaces/REST/Transform/`
-
-#### Assembler Entity → Resource:
-```csharp
-public static class NuevaEntidadResourceFromEntityAssembler
-{
-    public static NuevaEntidadResource ToResourceFromEntity(NuevaEntidad entity) =>
-        new(entity.Id,
-            entity.Campo1,
-            (int)entity.EnumCampo,     // cast a int
-            entity.NuevoVO.SubCampo);  // si hay owned attribute
-}
-```
-
-#### Assembler Resource → Command:
-```csharp
-public static class CreateNuevaEntidadCommandFromResourceAssembler
-{
-    public static CreateNuevaEntidadCommand ToCommandFromResource(CreateNuevaEntidadResource resource) =>
-        new(resource.Campo1,
-            (EEnum)resource.EnumCampo, // cast al enum
-            resource.Campo2);
-}
-```
-
-#### Action Result Assembler:
-```csharp
-public static class NuevaEntidadActionResultAssembler
-{
-    public static IActionResult ToActionResult(
-        Result<NuevaEntidad> result,
-        ControllerBase controller,
-        Func<NuevaEntidad, IActionResult> onSuccess,
-        ProblemDetailsFactory problemDetailsFactory)
-    {
-        if (result.IsSuccess && result.Value is not null)
-            return onSuccess(result.Value);
-
-        var statusCode = (NuevoBCErrors)result.Error! switch
-        {
-            NuevoBCErrors.InvalidX    => StatusCodes.Status400BadRequest,
-            NuevoBCErrors.DuplicateY  => StatusCodes.Status400BadRequest,
-            NuevoBCErrors.DatabaseError => StatusCodes.Status500InternalServerError,
-            _ => StatusCodes.Status500InternalServerError
-        };
-
-        return problemDetailsFactory.CreateProblemDetails(
-            controller, statusCode, result.Error!, result.Message);
-    }
-}
-```
-
----
-
-### 1️⃣3️⃣ `Interfaces/REST/Controller`
-```csharp
-[ApiController]
-[Route("api/v1/nueva-entidades")]
-[Produces("application/json")]
-[SwaggerTag("Available NuevaEntidad endpoints")]
-public class NuevaEntidadController(
-    INuevaEntidadCommandService commandService,
-    ProblemDetailsFactory problemDetailsFactory) : ControllerBase
-{
-    [HttpPost]
-    [SwaggerOperation(Summary = "Create a nueva entidad", OperationId = "CreateNuevaEntidad")]
-    [SwaggerResponse(201, "Created", typeof(NuevaEntidadResource))]
-    [SwaggerResponse(400, "Bad Request")]
-    [SwaggerResponse(500, "Internal Server Error")]
-    public async Task<IActionResult> CreateNuevaEntidad([FromBody] CreateNuevaEntidadResource resource)
-    {
-        var command = CreateNuevaEntidadCommandFromResourceAssembler.ToCommandFromResource(resource);
-        var result = await commandService.Handle(command);
-
-        return NuevaEntidadActionResultAssembler.ToActionResult(
-            result,
-            this,
-            entidad => CreatedAtAction(
-                nameof(CreateNuevaEntidad),
-                new { id = entidad.Id },
-                NuevaEntidadResourceFromEntityAssembler.ToResourceFromEntity(entidad)),
-            problemDetailsFactory);
-    }
-}
-```
-
----
-
-### 1️⃣4️⃣ `AppDbContext.cs` — agregar en `OnModelCreating`
-```csharp
 protected override void OnModelCreating(ModelBuilder builder)
 {
     base.OnModelCreating(builder);
-    builder.HasDefaultSchema("NombreEsquema"); // ← nombre del examen
-    builder.ApplyNuevoBCConfiguration();       // ← tu método
+    builder.HasDefaultSchema("NombreEsquema");
+    builder.ApplyNombreBCConfiguration();
     builder.UseSnakeCaseNamingConvention();
 }
-```
 
 ---
 
-### 1️⃣5️⃣ `Program.cs` — solo cambias estas líneas
+## Resources
 
-```csharp
-// Cambia el título
-options.SwaggerDoc("v1", new OpenApiInfo
-{
-    Title = "WebApplication1",
-    Version = "v1",
-    Description = "NombreExamen API"   // ← esto
-});
-
-// Cambia las inyecciones
-builder.Services.AddScoped<INuevaEntidadRepository, NuevaEntidadRepository>();
-builder.Services.AddScoped<INuevaEntidadCommandService, NuevaEntidadCommandService>();
-```
+Response (NombreResource): los campos que muestra el API. Enums como int. Excluir Amount u otros si el enunciado lo indica.
+Request (CreateNombreResource): los campos que recibe el API. Enums como int.
 
 ---
 
-### 1️⃣6️⃣ `appsettings.json` — solo el nombre de la BD
-```json
-{
-  "ConnectionStrings": {
-    "DefaultConnection": "server=localhost;user=root;password=;database=NombreExamen"
-  }
-}
-```
+## Assemblers
+
+Entity a Resource: mapea cada propiedad. Enums con cast (int). Owned attributes accediendo a sus subcampos.
+Resource a Command: mapea cada campo. Enums con cast (ENombre).
+ActionResult: switch de errores a status codes. 400 para errores de negocio. 500 para DatabaseError e InternalServerError. Llama a problemDetailsFactory.CreateProblemDetails(controller, statusCode, result.Error!, result.Message).
 
 ---
 
-### 1️⃣7️⃣ Migración
-```bash
+## Controller
+
+[ApiController] [Route("api/v1/nombre-entidades")] [Produces("application/json")]
+Constructor recibe INombreCommandService y ProblemDetailsFactory.
+Método HttpPost recibe [FromBody] CreateNombreResource.
+Llama al assembler pasando result, this, lambda de éxito con CreatedAtAction, y problemDetailsFactory.
+
+---
+
+## Program.cs - solo cambia esto
+
+builder.Services.AddScoped<INombreRepository, NombreRepository>();
+builder.Services.AddScoped<INombreCommandService, NombreCommandService>();
+Y el Description del SwaggerDoc.
+
+---
+
+## appsettings.json - solo cambia esto
+
+"database=NombreDelExamen" en el DefaultConnection.
+
+---
+
+## Migración
+
 dotnet ef migrations add InitialCreate
 dotnet ef database update
-```
 
 ---
 
-## ⏱️ Tiempo estimado por sección
+## Checklist rápido
 
-| Sección | Tiempo |
-|---|---|
-| Leer enunciado + identificar VOs y reglas | 5 min |
-| Value Objects + Errors enum | 5 min |
-| Aggregate Root + Command | 10 min |
-| Repository + CommandService | 10 min |
-| Infrastructure + ModelBuilder | 5 min |
-| Resources + Assemblers + Controller | 10 min |
-| Program.cs + migración + prueba Swagger | 5 min |
-| **Total** | **~50 min** |
-
----
-
-## 🎯 Checklist rápido para el examen
-
-```
-[ ] Leer enunciado completo
-[ ] Identificar: nombre BC, aggregate, VOs, reglas de negocio
-[ ] Crear enum(s) de Value Objects
-[ ] Crear owned attribute(s) si hay "owned attribute" en el enunciado
-[ ] Crear enum de errores (uno por regla de negocio)
-[ ] Crear Command
-[ ] Crear Aggregate Root
-[ ] Crear IRepository con métodos de validación
-[ ] Crear ICommandService + implementación con reglas
-[ ] Crear Repository con implementación de métodos
-[ ] Crear ModelBuilderExtensions con OwnsOne() si hay owned attribute
-[ ] Actualizar AppDbContext con HasDefaultSchema y ApplyXConfiguration
-[ ] Crear Resources (request y response)
-[ ] Crear 3 Assemblers (Entity→Resource, Resource→Command, ActionResult)
-[ ] Crear Controller con [HttpPost]
-[ ] Actualizar Program.cs (2 AddScoped)
-[ ] Actualizar appsettings.json (nombre BD)
-[ ] Correr migración
-[ ] Probar en Swagger con datos válidos e inválidos
-```
+Leer enunciado completo - Identificar BC, aggregate, VOs y reglas
+Crear enums y owned attributes - Crear enum de errores
+Crear command - Crear aggregate root
+Crear IRepository - Crear ICommandService
+Crear implementaciones - Crear ModelBuilderExtensions
+Actualizar AppDbContext - Crear resources
+Crear 3 assemblers - Crear controller
+Actualizar Program.cs - Actualizar appsettings
+Correr migración - Probar en Swagger
